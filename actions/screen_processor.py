@@ -86,15 +86,36 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
 
 
 def _capture_screen() -> tuple[bytes, str]:
-
     if not _MSS:
         raise RuntimeError("mss is not installed. Run: pip install mss")
 
     with mss.mss() as sct:
         monitors = sct.monitors          # [0] = all combined, [1..n] = real screens
-        target   = monitors[1] if len(monitors) > 1 else monitors[0]
+        target   = monitors[0]
         shot     = sct.grab(target)
         png      = mss.tools.to_png(shot.rgb, shot.size)
+
+    if _PIL:
+        try:
+            import pyautogui
+            from PIL import ImageDraw
+
+            pointer_x, pointer_y = pyautogui.position()
+            x = int(pointer_x - target["left"])
+            y = int(pointer_y - target["top"])
+            if 0 <= x < target["width"] and 0 <= y < target["height"]:
+                image = PIL.Image.open(io.BytesIO(png)).convert("RGB")
+                draw = ImageDraw.Draw(image)
+                radius = max(10, min(22, image.width // 50))
+                draw.ellipse((x - radius, y - radius, x + radius, y + radius),
+                             outline="#ff2d55", width=max(3, radius // 5))
+                draw.line((x - radius, y, x + radius, y), fill="#ffffff", width=2)
+                draw.line((x, y - radius, x, y + radius), fill="#ffffff", width=2)
+                buf = io.BytesIO()
+                image.save(buf, format="PNG")
+                png = buf.getvalue()
+        except Exception as e:
+            print(f"[Vision] Cursor marker unavailable: {e}")
 
     return _compress(png, "PNG")
 

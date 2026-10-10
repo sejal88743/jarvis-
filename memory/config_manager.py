@@ -1,13 +1,9 @@
 import json
 import sys
 from pathlib import Path
+from core.paths import app_root
 
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
-
-BASE_DIR    = get_base_dir()
+BASE_DIR    = app_root()
 CONFIG_DIR  = BASE_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "api_keys.json"
 
@@ -119,6 +115,15 @@ def save_wake_word_enabled(enabled: bool) -> None:
             data = {}
     data["wake_word_enabled"] = bool(enabled)
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+def get_live_screen_enabled() -> bool:
+    """Whether screen frames may be continuously shared with the Live model."""
+    return bool(load_api_keys().get("live_screen_enabled", False))
+
+
+def save_live_screen_enabled(enabled: bool) -> None:
+    _save_flag("live_screen_enabled", enabled)
 
 
 def get_push_to_talk_enabled() -> bool:

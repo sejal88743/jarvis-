@@ -25,18 +25,13 @@ from pathlib import Path
 from typing import Callable, Generator
 
 import requests
+from core.paths import app_root
 
 # Matches a sentence boundary: [.!?] followed by whitespace, or a blank line.
 # Avoids splitting on decimals (3.5) because those have no space after the dot.
 _SENT_END = re.compile(r'(?<=[.!?])\s+|(?<=\n)\s*\n')
 
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
-
-
-BASE_DIR    = get_base_dir()
+BASE_DIR    = app_root()
 CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
 _DEFAULTS = {

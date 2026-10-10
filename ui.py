@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
     QGraphicsScene, QGraphicsView,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
+from core.paths import app_root
 
 try:
     from core.avatar import HoloAvatar
@@ -62,12 +63,7 @@ except Exception:      # pragma: no cover — HUD must never die over cosmetics
     HoloAvatar = None
 
 
-def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent
-
-BASE_DIR   = _base_dir()
+BASE_DIR   = app_root()
 CONFIG_DIR = BASE_DIR / "config"
 API_FILE   = CONFIG_DIR / "api_keys.json"
 
@@ -2993,6 +2989,7 @@ class MainWindow(QMainWindow):
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas, set by JarvisLive
         self.on_wake_toggle    = None   # callable: (enable: bool) -> str, set by JarvisLive
         self.on_wake_manual    = None   # callable: () -> None — manual sleep/wake
+        self.on_live_screen_toggle = None  # callable: (enabled: bool) -> None
         self.on_push_to_talk   = None   # callable: (enable: bool) -> str scope
         self.ptt_hold          = None   # callable: (held: bool) -> None — windowed chord
         self.wake_get_state    = None   # callable: () -> dict {enabled, awake, ready}
@@ -4306,6 +4303,10 @@ class MainWindow(QMainWindow):
         self._wake_btn.setStyleSheet(self._BTN_DIM)
         self._wake_sleep_btn.hide()
 
+        self._live_screen_btn = _row(QPushButton())
+        self._live_screen_btn.clicked.connect(self._toggle_live_screen)
+        self._refresh_live_screen_btn()
+
         self._ptt_btn = _row(QPushButton())
         self._ptt_btn.clicked.connect(self._toggle_ptt)
         self._refresh_talk_btns()
@@ -5135,6 +5136,39 @@ class MainWindow(QMainWindow):
             "Microphone stays closed until you hold the key — nothing is sent "
             "while you are not holding it." if ptt
             else "Hold a key to talk instead of streaming the mic continuously.")
+
+    def _refresh_live_screen_btn(self):
+        if not hasattr(self, "_live_screen_btn"):
+            return
+        from memory.config_manager import get_live_screen_enabled
+
+        enabled = get_live_screen_enabled()
+        self._live_screen_btn.setText(
+            "▣  LIVE SCREEN SHARE: ON" if enabled
+            else "▣  LIVE SCREEN SHARE: OFF"
+        )
+        self._live_screen_btn.setToolTip(
+            "Desktop frames are sent to Gemini at up to one per second while enabled. Click to stop sharing."
+            if enabled else
+            "Share desktop frames with Gemini at up to one per second. Click to enable."
+        )
+        self._live_screen_btn.setStyleSheet(self._BTN_PRI if enabled else self._BTN_DIM)
+
+    def _toggle_live_screen(self):
+        from memory.config_manager import (
+            get_live_screen_enabled,
+            save_live_screen_enabled,
+        )
+
+        enabled = not get_live_screen_enabled()
+        save_live_screen_enabled(enabled)
+        if self.on_live_screen_toggle:
+            try:
+                self.on_live_screen_toggle(enabled)
+            except Exception as exc:
+                save_live_screen_enabled(False)
+                self._log.append_log(f"ERR: Live Screen Share failed — {exc}")
+        self._refresh_live_screen_btn()
 
 
     def _refresh_hud_btn(self):

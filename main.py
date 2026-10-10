@@ -69,7 +69,7 @@ from actions.background_monitor import (
 )
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import (
-    get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
+    get_brief_enabled, get_live_screen_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
 )
@@ -77,26 +77,25 @@ from core                     import gemini as _gemini
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
+from core.paths                import app_root, resource_root
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core.viseme               import VisemeStream
 from core.wake_word            import (
-    WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
+    WakeWordDetector,
+    is_ready as wake_is_ready,
+    install_and_download as wake_install,
+    resolve_wake_word_state,
 )
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
 WAKE_SLEEP_TIMEOUT = 120.0   # seconds (2 minutes)
 
-def get_base_dir():
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent
-
-BASE_DIR        = get_base_dir()
+BASE_DIR        = app_root()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
+PROMPT_PATH     = resource_root() / "core" / "prompt.txt"
 # The conversation's model. A NAME, not a decision: the ladder lives in
 # core/gemini.py and this is only whichever rung is currently in use, kept here
 # as a module attribute because plugins read it (chat_takeover asks main for it
@@ -109,6 +108,11 @@ CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000 
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE          = 1024
+
+
+def _pcm_mime_type(sample_rate: int) -> str:
+    """Describe PCM audio with the rate expected by the Gemini Live API."""
+    return f"audio/pcm;rate={int(sample_rate)}"
 
 # RMS below which 16-bit PCM is treated as room silence; above _LEVEL_FULL it
 # reads as a full-height waveform. Tuned so ordinary speech lands mid-range and
@@ -246,7 +250,8 @@ def _describe_tools(declarations) -> str:
     return "\n".join(lines)
 
 
-def _describe_limits(has_vision: bool, has_mic: bool) -> str:
+def _describe_limits(has_vision: bool, has_mic: bool,
+                     live_screen: bool = False) -> str:
     """The other half of self-knowledge: what is out of reach, and why.
 
     Derived from how the program is actually built, not from a list of refusals.
@@ -263,7 +268,13 @@ def _describe_limits(has_vision: bool, has_mic: bool) -> str:
         "- You remember what is in the memory block and what has been said this "
         "session. Anything else you were told before is gone unless it was saved.",
     ]
-    if has_vision:
+    if live_screen:
+        out.append(
+            "- Live Screen Share is enabled: desktop frames are sent to the model "
+            "at up to one frame per second. You may use the current view to act "
+            "without waiting for a separate screenshot request. Do not claim to "
+            "see private content that is not visible in the frame.")
+    elif has_vision:
         out.append(
             "- Your sight is not continuous. You see nothing until you call a "
             "vision tool, and then only that single frame at that moment — you "
@@ -288,6 +299,13 @@ def _render_prompt(template: str, values: dict) -> str:
     for key, val in values.items():
         out = out.replace("{" + key + "}", str(val))
     return out
+
+
+async def _send_live_screen_frame(session) -> None:
+    image_bytes, mime_type = await asyncio.to_thread(_capture_screen)
+    await session.send_realtime_input(
+        video=types.Blob(data=image_bytes, mime_type=mime_type)
+    )
 
 
 def _get_api_key() -> str:
@@ -497,6 +515,62 @@ TOOL_DECLARATIONS = [
     },
 ]
 
+class _CompatTaskGroup:
+    """Small TaskGroup fallback for the supported Python 3.10 runtime."""
+
+    def __init__(self):
+        self._tasks = []
+
+    async def __aenter__(self):
+        return self
+
+    def create_task(self, coro):
+        task = asyncio.create_task(coro)
+        self._tasks.append(task)
+        return task
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc is not None:
+            for task in self._tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            return False
+
+        if not self._tasks:
+            return False
+
+        try:
+            done, pending = await asyncio.wait(
+                self._tasks, return_when=asyncio.FIRST_EXCEPTION
+            )
+        except BaseException:
+            for task in self._tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            raise
+
+        first_error = next(
+            (task.exception() for task in done
+             if not task.cancelled() and task.exception() is not None),
+            None,
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        if first_error is not None:
+            raise first_error
+        return False
+
+
+_TaskGroup = getattr(asyncio, "TaskGroup", _CompatTaskGroup)
+try:
+    _BaseExceptionGroup = BaseExceptionGroup
+except NameError:
+    _BaseExceptionGroup = ()
+
+
 class _ReconnectSignal(Exception):
     """Raised inside the session TaskGroup to force a clean, voluntary reconnect
     (e.g. the user picked a new voice — the voice is fixed at connect time, so
@@ -517,7 +591,7 @@ def _is_reconnect_signal(exc: BaseException) -> bool:
     wraps one — TaskGroup bundles child exceptions into a group."""
     if isinstance(exc, _ReconnectSignal):
         return True
-    if isinstance(exc, BaseExceptionGroup):
+    if _BaseExceptionGroup and isinstance(exc, _BaseExceptionGroup):
         return any(_is_reconnect_signal(sub) for sub in exc.exceptions)
     return False
 
@@ -528,7 +602,7 @@ def _keep_context_of(exc: BaseException) -> bool:
     wipe the conversation."""
     if isinstance(exc, _ReconnectSignal):
         return getattr(exc, "keep_context", True)
-    if isinstance(exc, BaseExceptionGroup):
+    if _BaseExceptionGroup and isinstance(exc, _BaseExceptionGroup):
         for sub in exc.exceptions:
             if _is_reconnect_signal(sub):
                 return _keep_context_of(sub)
@@ -581,6 +655,7 @@ class JarvisLive:
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
+        self.ui.on_live_screen_toggle = self._on_live_screen_toggle
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
 
@@ -610,7 +685,7 @@ class JarvisLive:
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
 
-        _base_dir = Path(__file__).resolve().parent
+        _base_dir = app_root()
         _inline_names = {t["name"] for t in TOOL_DECLARATIONS}
 
         # File-backed tools: every actions/*.py with a TOOL dict, discovered the
@@ -640,8 +715,11 @@ class JarvisLive:
         # ── Wake word ────────────────────────────────────────────────────────
         # _awake gates the mic (see _listen_audio) and the background speakers.
         # It is True whenever wake word is OFF, so default behaviour is unchanged.
-        self._wake_enabled     = get_wake_word_enabled()
-        self._awake            = not self._wake_enabled
+        # If the feature is enabled in config but its local model is not available,
+        # fall back to normal listening instead of leaving the assistant asleep.
+        self._wake_enabled, self._awake = resolve_wake_word_state(get_wake_word_enabled())
+        if self._wake_enabled is False and get_wake_word_enabled() is True:
+            self.ui.write_log("SYS: Wake word unavailable — falling back to normal listening.")
         self._wake_detector: WakeWordDetector | None = None
         self._wake_sleep_timeout = WAKE_SLEEP_TIMEOUT
 
@@ -721,6 +799,10 @@ class JarvisLive:
         'enabled' | 'disabled' | 'need_download'."""
         if enable:
             if not wake_is_ready():
+                self._wake_enabled = False
+                save_wake_word_enabled(False)
+                self.wake(reason="wake word unavailable; using normal listening")
+                self.ui.write_log("SYS: Wake word unavailable — normal listening mode restored.")
                 return "need_download"
             self._wake_enabled = True
             save_wake_word_enabled(True)
@@ -808,6 +890,10 @@ class JarvisLive:
         but the conversation is kept, which is the whole reason resumption
         landed before this feature did."""
         self.request_reconnect(keep_context=True, reason="audio device")
+
+    def _on_live_screen_toggle(self, enabled: bool) -> None:
+        state = "on; screen frames are being shared with Gemini" if enabled else "off"
+        self.ui.write_log(f"SYS: Live Screen Share {state}.")
 
     async def _watch_reconnect(self):
         """Session-scoped task: when a voluntary reconnect is requested, raise a
@@ -1017,6 +1103,7 @@ class JarvisLive:
             "limits": _describe_limits(
                 has_vision="screen_process" in _names,
                 has_mic=True,
+                live_screen=get_live_screen_enabled(),
             ),
         })
 
@@ -1302,7 +1389,7 @@ class JarvisLive:
             await self.session.send_realtime_input(
                 audio=types.Blob(
                     data=msg["data"],
-                    mime_type=msg.get("mime_type", "audio/pcm"),
+                    mime_type=msg.get("mime_type", _pcm_mime_type(SEND_SAMPLE_RATE)),
                 )
             )
 
@@ -1374,7 +1461,7 @@ class JarvisLive:
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
+                    {"data": data, "mime_type": _pcm_mime_type(SEND_SAMPLE_RATE)}
                 )
                 # Feed the live mic level to the HUD so the waveform reacts to
                 # the user's actual voice while listening. Purely cosmetic — any
@@ -1425,6 +1512,34 @@ class JarvisLive:
         except Exception as e:
             print(f"[JARVIS] ❌ Mic: {e}")
             raise
+
+    async def _run_live_screen(self):
+        """Send opt-in screen frames at the Live API's one-fps ceiling."""
+        enabled_since = None
+        last_error_log = 0.0
+        while True:
+            if not get_live_screen_enabled() or not self.session:
+                enabled_since = None
+                await asyncio.sleep(0.5)
+                continue
+
+            now = time.monotonic()
+            if enabled_since is None:
+                enabled_since = now
+            elif now - enabled_since >= 105.0:
+                self.request_reconnect(keep_context=True, reason="live screen session refresh")
+                await asyncio.sleep(2.0)
+                continue
+
+            try:
+                await _send_live_screen_frame(self.session)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if time.monotonic() - last_error_log > 10.0:
+                    self.ui.write_log(f"ERR: Live screen frame failed: {exc}")
+                    last_error_log = time.monotonic()
+            await asyncio.sleep(1.0)
 
     async def _flush_pending_vision(self) -> bool:
         """Send a captured frame immediately after its tool response.
@@ -2116,7 +2231,7 @@ class JarvisLive:
 
                 async with (
                     client.aio.live.connect(model=live_model, config=config) as session,
-                    asyncio.TaskGroup() as tg,
+                    _TaskGroup() as tg,
                 ):
                     self.session          = session
                     self.audio_in_queue   = asyncio.Queue()
@@ -2163,6 +2278,7 @@ class JarvisLive:
                     tg.create_task(self._run_background_monitor())
                     tg.create_task(self._run_proactive_mode())
                     tg.create_task(self._run_sleep_watch())
+                    tg.create_task(self._run_live_screen())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())
 

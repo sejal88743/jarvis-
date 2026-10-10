@@ -67,6 +67,21 @@ def is_ready() -> bool:
         return False
 
 
+def resolve_wake_word_state(enabled: bool, *, ready: bool | None = None) -> tuple[bool, bool]:
+    """Return (wake_word_enabled, assistant_awake).
+
+    If the wake model is unavailable, the assistant falls back to normal listening
+    instead of being stuck asleep forever. This is the safe default for users that
+    never installed the optional local wake-word dependency.
+    """
+    ready = is_ready() if ready is None else bool(ready)
+    if enabled and not ready:
+        return False, True
+    if enabled:
+        return True, False
+    return False, True
+
+
 def install_and_download(logger: Callable[[str], None] = print,
                          notify: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """

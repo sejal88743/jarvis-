@@ -70,11 +70,9 @@ import sys
 import time
 import threading
 from pathlib import Path
+from core.paths import app_root
 
-if getattr(sys, "frozen", False):
-    _BASE = Path(sys.executable).parent
-else:
-    _BASE = Path(__file__).resolve().parent.parent
+_BASE = app_root()
 
 _KEY_FILE = _BASE / "config" / "api_keys.json"
 

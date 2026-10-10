@@ -28,7 +28,7 @@ def _get_os() -> str:
 
 
 def _scripts_dir() -> Path:
-    d = Path.home() / ".jarvis" / "reminders"
+    d = _base_dir() / "reminders"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

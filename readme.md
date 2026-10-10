@@ -282,6 +282,19 @@ python main.py
 
 `setup.py` only ever installs what your operating system needs — the Windows-only libraries are skipped automatically on macOS and Linux, and vice-versa. It also checks your Python version up front, so a wrong interpreter fails with a sentence instead of a wall of pip output. Prefer to do it by hand? `pip install -r requirements.txt` works too.
 
+### Portable Windows build
+
+Build a one-folder distribution with dependencies, dynamic actions, plugins, and writable `config/` and `memory/` folders beside the executable:
+
+```powershell
+py -3.10 -m pip install -r requirements-build.txt
+py -3.10 build_windows.py
+```
+
+The result is `dist/MARK-LV/MARK-LV.exe`. Keep the whole `MARK-LV` folder together. The build intentionally leaves API keys and personal memory out; enter the API key on first run. Plugins can be added under `dist/MARK-LV/plugins/` and are discovered after restart.
+
+`CONTROLS → LIVE SCREEN SHARE` is off by default. When enabled, desktop frames are sent to Gemini Live at up to one frame per second so JARVIS can use the current screen while acting; turn it off to stop sharing.
+
 > ⚠️ **Installation Note:** If you hit a `ModuleNotFoundError` for an OS-specific package, install it with `pip install <module_name>`. The optional **wake word** engine is *not* installed here — grab it in one click from **⚙ → WAKE WORD** inside the app.
 
 ---
@@ -291,7 +304,7 @@ python main.py
 | Requirement | Details |
 | --- | --- |
 | **OS** | Windows 10/11, macOS, or Linux |
-| **Python** | 3.11, 3.12 or 3.13 |
+| **Python** | 3.10 or newer (3.10–3.13 tested) |
 | **Microphone** | Required for voice interaction (and for the "Hey Jarvis" wake word) |
 | **Speakers** | Required for voice replies |
 | **API Key** | Free Gemini API key (entered on first launch → `config/api_keys.json`) |

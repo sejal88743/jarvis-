@@ -17,6 +17,7 @@ import socket
 import string
 import time
 from pathlib import Path
+from core.paths import app_root, resource_root
 
 _DEPS_OK = False
 try:
@@ -35,25 +36,17 @@ try:
 except Exception:
     pass
 
-BASE_DIR    = Path(__file__).resolve().parent.parent
-STATIC_DIR  = Path(__file__).parent / "static"
+BASE_DIR    = app_root()
+STATIC_DIR  = resource_root() / "dashboard" / "static"
 PORT        = 8000
 MAX_UPLOAD_MB = 500
 
 
 def _make_uploads_dir() -> Path:
-    """Return (and create) the cross-platform uploads folder."""
-    for candidate in [
-        Path.home() / "Downloads" / "JARVIS Uploads",
-        Path.home() / "Documents" / "JARVIS Uploads",
-        BASE_DIR / "uploads",
-    ]:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except Exception:
-            pass
-    return BASE_DIR / "uploads"
+    """Keep dashboard uploads inside the portable application folder."""
+    uploads = BASE_DIR / "uploads"
+    uploads.mkdir(parents=True, exist_ok=True)
+    return uploads
 
 
 UPLOADS_DIR = _make_uploads_dir()

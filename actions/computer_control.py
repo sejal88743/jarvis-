@@ -199,8 +199,11 @@ def _press(key: str) -> str:
     return f"Pressed: {key}"
 
 
-def _scroll(direction: str = "down", amount: int = 3) -> str:
+def _scroll(direction: str = "down", amount: int = 3,
+            x: int | None = None, y: int | None = None) -> str:
     _require_pyautogui()
+    if x is not None and y is not None:
+        pyautogui.moveTo(int(x), int(y), duration=0.15)
     vertical   = direction in ("up", "down")
     clicks     = amount if direction in ("up", "right") else -amount
     pyautogui.scroll(clicks) if vertical else pyautogui.hscroll(clicks)
@@ -372,7 +375,8 @@ def computer_control(
       keys          : hotkey string, e.g. 'ctrl+c'
       key           : single key name, e.g. 'enter'
       direction     : 'up' | 'down' | 'left' | 'right'
-      amount        : scroll amount (default: 3)
+    amount        : scroll amount (default: 3)
+    x, y          : optional point inside the pane to scroll
       seconds       : wait duration
       title         : window title fragment for focus_window
       description   : natural-language element description for screen_find/click
@@ -455,6 +459,8 @@ def computer_control(
             return _scroll(
                 direction=params.get("direction", "down"),
                 amount=int(params.get("amount", 3)),
+                x=params.get("x"),
+                y=params.get("y"),
             )
 
         if action == "copy":
@@ -516,7 +522,7 @@ def computer_control(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "computer_control",
-    "description": "Direct computer control: type, click, hotkeys, scroll, move mouse, screenshots, find elements on screen.",
+    "description": "Direct computer control: type, click, hotkeys, scroll a pane at optional x/y coordinates, move mouse, screenshot with visible cursor, and find elements on screen.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -551,6 +557,14 @@ TOOL = {
             "amount": {
                 "type": "INTEGER",
                 "description": "Scroll amount (default: 3)"
+            },
+            "x": {
+                "type": "INTEGER",
+                "description": "Optional X coordinate inside the pane to scroll"
+            },
+            "y": {
+                "type": "INTEGER",
+                "description": "Optional Y coordinate inside the pane to scroll"
             },
             "seconds": {
                 "type": "NUMBER",

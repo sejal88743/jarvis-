@@ -11,6 +11,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from typing import Optional
+from core.paths import app_root
 
 from playwright.async_api import (
     async_playwright,
@@ -107,7 +108,7 @@ def _real_profile_dir(browser: str) -> str:
             print(f"[Browser] ✅ Real profile found for {browser}: {p}")
             return str(p)
 
-    fallback = home / ".jarvis_profiles" / browser
+    fallback = app_root() / "data" / "browser_profiles" / browser
     fallback.mkdir(parents=True, exist_ok=True)
     print(f"[Browser] ⚠️  Real profile not found for {browser}, using: {fallback}")
     return str(fallback)
@@ -533,7 +534,7 @@ class _BrowserSession:
 
         if engine_name == "firefox":
             profile = _firefox_profile_dir() or str(
-                Path.home() / ".jarvis_profiles" / "firefox"
+                app_root() / "data" / "browser_profiles" / "firefox"
             )
             kwargs: dict = {
                 "headless":    False,
@@ -548,7 +549,7 @@ class _BrowserSession:
                 self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
             except Exception as e:
                 print(f"[Browser] Firefox real profile failed ({e}), using JARVIS profile")
-                jarvis = str(Path.home() / ".jarvis_profiles" / "firefox_jarvis")
+                jarvis = str(app_root() / "data" / "browser_profiles" / "firefox_jarvis")
                 Path(jarvis).mkdir(parents=True, exist_ok=True)
                 self._context = await engine_obj.launch_persistent_context(jarvis, **kwargs)
 
@@ -557,7 +558,7 @@ class _BrowserSession:
             return
 
         if engine_name == "webkit":
-            safari_profile = str(Path.home() / ".jarvis_profiles" / "safari")
+            safari_profile = str(app_root() / "data" / "browser_profiles" / "safari")
             Path(safari_profile).mkdir(parents=True, exist_ok=True)
             kwargs = {
                 "headless":    False,
@@ -611,7 +612,7 @@ class _BrowserSession:
         # profile / newer Chrome versions block the real profile under
         # automation). Fall back to a persistent JARVIS automation profile —
         # accounts logged in here once stay logged in on later sessions too.
-        jarvis_profile = str(Path.home() / ".jarvis_profiles" / self.browser_name)
+        jarvis_profile = str(app_root() / "data" / "browser_profiles" / self.browser_name)
         Path(jarvis_profile).mkdir(parents=True, exist_ok=True)
         print(f"[Browser] Retrying with JARVIS profile: {jarvis_profile}")
 
@@ -698,9 +699,27 @@ class _BrowserSession:
     async def scroll(self, direction: str = "down", amount: int = 500) -> str:
         page = await self._get_page()
         try:
-            y = amount if direction == "down" else -amount
-            await page.mouse.wheel(0, y)
-            return f"Scrolled {direction}."
+            delta = abs(int(amount)) * (1 if direction.lower() == "down" else -1)
+            viewport = page.viewport_size or {"width": 1280, "height": 720}
+            x = viewport["width"] // 2
+            y = viewport["height"] // 2
+            await page.mouse.move(x, y)
+            moved_panel = await page.evaluate("""delta => {
+                let element = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+                while (element) {
+                    const style = getComputedStyle(element);
+                    if (element.scrollHeight > element.clientHeight + 4 &&
+                        /(auto|scroll)/.test(style.overflowY)) {
+                        element.scrollBy(0, delta);
+                        return true;
+                    }
+                    element = element.parentElement;
+                }
+                window.scrollBy(0, delta);
+                return false;
+            }""", delta)
+            target = "conversation panel" if moved_panel else "page"
+            return f"Scrolled {direction} in the active {target}."
         except Exception as e:
             return f"Scroll error: {e}"
 
