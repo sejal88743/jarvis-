@@ -9,8 +9,15 @@ from openpyxl import Workbook, load_workbook
 PLUGIN = {
     "name": "whatsapp_group_ledger",
     "description": (
-        "Save payment details read from WhatsApp directly to the configured XLSX ledger, or process group screenshots from a folder. "
-        "Records include date, group, sender, bill number, and amount; duplicate records are skipped."
+        "THE tool for entering WhatsApp payment data into an Excel/XLSX file. "
+        "Use this whenever the user wants to read payment screenshots or images "
+        "from a WhatsApp group and save them into a spreadsheet/ledger (xls/xlsx). "
+        "Two ways to call it: (1) pass source_folder = a folder of payment images "
+        "and it OCRs each one; (2) pass record_text or sender_name/bill_no/"
+        "payment_amount for details already read on screen. "
+        "Captures date, group, sender, bill number and amount; duplicate rows are "
+        "skipped. This handles WhatsApp desktop directly — do NOT use browser_control "
+        "to drive WhatsApp for this task."
     ),
     "parameters": {
         "type": "OBJECT",
@@ -154,23 +161,30 @@ def _existing_hashes(path: Path) -> set[str]:
         wb = load_workbook(path, read_only=True, data_only=True)
     except Exception:
         return set()
-    sheets = wb.sheetnames or ["Sheet"]
     seen = set()
-    for sheet_name in sheets:
-        ws = wb[sheet_name]
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row:
-                continue
-            hash_value = None
-            for idx in (6, 7):
-                if len(row) > idx and isinstance(row[idx], str):
-                    hash_value = row[idx]
-                    break
-            if hash_value is None and len(row) > 6:
-                hash_value = row[6]
-            if isinstance(hash_value, str) and hash_value.strip():
-                seen.add(hash_value.strip())
-    wb.close()
+    try:
+        sheets = wb.sheetnames or ["Sheet"]
+        for sheet_name in sheets:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row:
+                    continue
+                hash_value = None
+                for idx in (6, 7):
+                    if len(row) > idx and isinstance(row[idx], str):
+                        hash_value = row[idx]
+                        break
+                if hash_value is None and len(row) > 6:
+                    hash_value = row[6]
+                if isinstance(hash_value, str) and hash_value.strip():
+                    seen.add(hash_value.strip())
+    finally:
+        # Always release the handle — a corrupt sheet must not leave the file
+        # locked, or the next append fails on Windows.
+        try:
+            wb.close()
+        except Exception:
+            pass
     return seen
 
 

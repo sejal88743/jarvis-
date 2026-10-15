@@ -45,6 +45,39 @@ def _load_config() -> dict:
     except Exception:
         return {}
 
+def _coerce_int(value, default: int = 0) -> int:
+    """Coerce a model-supplied value to an int without ever raising.
+
+    The model frequently puts a word where a number belongs ("down", "large",
+    "a lot", "small"), which used to crash `int(...)` and take the whole action
+    with it. Numbers pass through; known words map to a sensible amount; anything
+    unparseable falls back to the default instead of raising.
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        pass
+    words = {
+        "tiny": 1, "small": 2, "little": 2, "a bit": 2,
+        "medium": 5, "moderate": 5, "normal": 5,
+        "large": 10, "big": 10, "a lot": 10, "lots": 10,
+        "huge": 20, "massive": 20,
+    }
+    for word, amount in words.items():
+        if word in text:
+            return amount
+    return default
+
+
 def _platform_os() -> str:
     return {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
         platform.system(), "linux"
@@ -203,7 +236,8 @@ def _scroll(direction: str = "down", amount: int = 3,
             x: int | None = None, y: int | None = None) -> str:
     _require_pyautogui()
     if x is not None and y is not None:
-        pyautogui.moveTo(int(x), int(y), duration=0.15)
+        pyautogui.moveTo(_coerce_int(x), _coerce_int(y), duration=0.15)
+    amount     = _coerce_int(amount, default=3)
     vertical   = direction in ("up", "down")
     clicks     = amount if direction in ("up", "right") else -amount
     pyautogui.scroll(clicks) if vertical else pyautogui.hscroll(clicks)
@@ -439,12 +473,12 @@ def computer_control(
             return _click(params.get("x"), params.get("y"), "right", 1)
 
         if action == "move":
-            return _move(int(params.get("x", 0)), int(params.get("y", 0)))
+            return _move(_coerce_int(params.get("x")), _coerce_int(params.get("y")))
 
         if action == "drag":
             return _drag(
-                int(params.get("x1", 0)), int(params.get("y1", 0)),
-                int(params.get("x2", 0)), int(params.get("y2", 0)),
+                _coerce_int(params.get("x1")), _coerce_int(params.get("y1")),
+                _coerce_int(params.get("x2")), _coerce_int(params.get("y2")),
             )
 
         if action == "hotkey":
@@ -456,9 +490,19 @@ def computer_control(
             return _press(params.get("key", "enter"))
 
         if action == "scroll":
+            # The model sometimes drops the direction word into `amount`
+            # ("amount": "down"). Treat a non-numeric amount as the direction
+            # rather than crashing on int("down").
+            raw_amount = params.get("amount", 3)
+            direction  = params.get("direction", "down")
+            amount     = _coerce_int(raw_amount, default=0)
+            if amount == 0 and isinstance(raw_amount, str) \
+                    and raw_amount.strip().lower() in ("up", "down", "left", "right"):
+                direction = raw_amount.strip().lower()
+                amount    = 3
             return _scroll(
-                direction=params.get("direction", "down"),
-                amount=int(params.get("amount", 3)),
+                direction=direction,
+                amount=amount or 3,
                 x=params.get("x"),
                 y=params.get("y"),
             )
@@ -536,11 +580,11 @@ TOOL = {
             },
             "x": {
                 "type": "INTEGER",
-                "description": "X coordinate"
+                "description": "X coordinate (also used as optional X coordinate inside the pane to scroll)"
             },
             "y": {
                 "type": "INTEGER",
-                "description": "Y coordinate"
+                "description": "Y coordinate (also used as optional Y coordinate inside the pane to scroll)"
             },
             "keys": {
                 "type": "STRING",
@@ -557,14 +601,6 @@ TOOL = {
             "amount": {
                 "type": "INTEGER",
                 "description": "Scroll amount (default: 3)"
-            },
-            "x": {
-                "type": "INTEGER",
-                "description": "Optional X coordinate inside the pane to scroll"
-            },
-            "y": {
-                "type": "INTEGER",
-                "description": "Optional Y coordinate inside the pane to scroll"
             },
             "seconds": {
                 "type": "NUMBER",

@@ -317,7 +317,13 @@ class _SysMetrics:
         if self._pynvml_ok is not False:
             try:
                 if self._pynvml_h is None:
-                    import pynvml  # type: ignore
+                    # Silence the deprecation notice the `pynvml` shim prints:
+                    # the successor package (nvidia-ml-py) still imports as
+                    # `pynvml`, and Windows' bundled NVML DLL works without it.
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        import pynvml  # type: ignore
                     pynvml.nvmlInit()
                     self._pynvml    = pynvml
                     self._pynvml_h  = pynvml.nvmlDeviceGetHandleByIndex(0)

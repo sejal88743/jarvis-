@@ -5,6 +5,7 @@ import asyncio
 import concurrent.futures
 import os
 import platform
+import re
 import shutil
 import subprocess
 import threading
@@ -942,6 +943,25 @@ class _SessionRegistry:
 
 _registry = _SessionRegistry()
 
+def _coerce_amount(value, default: int = 500) -> int:
+    """Best-effort int for a scroll amount that the model may send as text.
+
+    The schema declares INTEGER, but models routinely ignore it and send a word
+    ("large", "a lot", "small") or a string number. A bare int() then raises
+    invalid-literal and takes the whole browser action down; fall back to the
+    default instead, and read a leading number out of text when there is one.
+    """
+    if isinstance(value, bool) or value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        m = re.search(r"-?\d+", str(value))
+        return int(m.group()) if m else default
+
+
 def browser_control(
     parameters:    dict = None,
     response=None,
@@ -1037,7 +1057,9 @@ def browser_control(
             result = sess.run(sess.type_text(
                 params.get("selector"), params.get("text", ""), params.get("clear_first", True)))
         elif action == "scroll":
-            result = sess.run(sess.scroll(params.get("direction", "down"), int(params.get("amount", 500))))
+            result = sess.run(sess.scroll(
+                params.get("direction", "down"),
+                _coerce_amount(params.get("amount", 500))))
         elif action == "fill_form":
             result = sess.run(sess.fill_form(params.get("fields", {})))
         elif action == "smart_click":
@@ -1082,7 +1104,7 @@ def _log(player, text: str):
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "browser_control",
-    "description": "Controls any web browser. Use for: opening websites, searching the web, clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. Simple open/search requests launch the user's own browser normally (their real profile and logged-in accounts); interactive actions (click, type, fill_form...) attach an automation browser. Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', 'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously.",
+    "description": "Controls a WEB BROWSER only (Chrome/Edge/Firefox/Opera/Brave/Vivaldi/Safari) for websites: opening URLs, searching, clicking page elements, filling forms, scrolling, screenshots, navigation. Simple open/search requests launch the user's own browser normally (their real profile and logged-in accounts); interactive actions (click, type, fill_form...) attach an automation browser. Always pass the 'browser' parameter when the user specifies one (e.g. 'open in Edge', 'use Firefox'). Multiple browsers can run at once. NOTE: this drives web pages, not desktop apps — to read WhatsApp messages/images into a spreadsheet use the whatsapp_group_ledger skill, and to launch a desktop program use open_app.",
     "parameters": {
         "type": "OBJECT",
         "properties": {

@@ -3,7 +3,7 @@
     "os_system": "windows",
     "input_device": "",
     "output_device": "",
-    "voice_name": "Fenrir",
+    "voice_name": "Aoede",
     "assistant_name": "JARVIS",
     "user_name": "",
     "ui_color": "#00ff87",
@@ -11,5 +11,7 @@
     "morning_brief_enabled": true,
     "hud_style": "face",
     "wake_word_enabled": false,
-    "camera_index": 0
+    "camera_index": 0,
+    "advanced_mode": true,
+    "live_screen_enabled": true
 }

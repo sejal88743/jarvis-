@@ -1,5 +1,6 @@
 #desktop.py
 import os
+import re
 import sys
 import json
 import shutil
@@ -166,11 +167,15 @@ def set_wallpaper(image_path: str) -> str:
             if path.suffix.lower() in {".webp", ".png"}:
                 try:
                     from PIL import Image
-                    bmp_path = Path(tempfile.mktemp(suffix=".bmp"))
+                    # mkstemp, not mktemp: mktemp hands back a *name*, so a
+                    # concurrent process can claim the path before we write it.
+                    _fd, _bmp = tempfile.mkstemp(suffix=".bmp")
+                    os.close(_fd)
+                    bmp_path = Path(_bmp)
                     Image.open(path).convert("RGB").save(bmp_path, "BMP")
                     path = bmp_path
                 except ImportError:
-                    pass 
+                    pass
             ctypes.windll.user32.SystemParametersInfoW(20, 0, str(path), 3)
             return f"Wallpaper set: {path.name}"
 
@@ -241,7 +246,13 @@ def set_wallpaper_from_url(url: str) -> str:
     try:
         import urllib.request
         suffix = Path(url.split("?")[0]).suffix or ".jpg"
-        tmp    = Path(tempfile.mktemp(suffix=suffix))
+        # Guard against a path-traversal suffix (e.g. "../evil") coming in from a
+        # URL: keep only a sane extension.
+        if not re.fullmatch(r"\.[A-Za-z0-9]{1,5}", suffix):
+            suffix = ".jpg"
+        _fd, _tmp = tempfile.mkstemp(suffix=suffix)
+        os.close(_fd)
+        tmp = Path(_tmp)
         urllib.request.urlretrieve(url, str(tmp))
         result = set_wallpaper(str(tmp))
         try:

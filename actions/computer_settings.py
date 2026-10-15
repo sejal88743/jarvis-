@@ -32,6 +32,39 @@ else:
     _WIN_HIDE: dict = {}
 
 
+def _coerce_amount(value, default: int) -> int:
+    """Coerce a model-supplied value to an int without ever raising.
+
+    The model often fills a numeric slot with a word ("down", "large",
+    "a lot", "small"). `int("down")` used to raise ValueError and take the
+    whole action down with it. Numbers pass through, known words map to a
+    sensible amount, and anything else falls back to the default.
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        pass
+    words = {
+        "tiny": 1, "small": 2, "little": 2, "a bit": 2,
+        "medium": 5, "moderate": 5, "normal": 5,
+        "large": 10, "big": 10, "a lot": 10, "lots": 10,
+        "huge": 20, "massive": 20,
+    }
+    for word, amount in words.items():
+        if word in text:
+            return amount
+    return default
+
+
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -856,18 +889,19 @@ def computer_settings(
         return f"Pressed: {key}"
 
     if action in ("reload_n", "refresh_n", "reload_page_n"):
+        n = _coerce_amount(value, 1)
         try:
-            reload_page_n(int(value or 1))
-            return f"Reloaded {value or 1} time(s)."
+            reload_page_n(n)
+            return f"Reloaded {n} time(s)."
         except Exception as e:
             return f"Reload failed: {e}"
 
     if action == "scroll_up":
-        scroll_up(int(value or 500))
+        scroll_up(_coerce_amount(value, 500))
         return "Scrolled up."
 
     if action == "scroll_down":
-        scroll_down(int(value or 500))
+        scroll_down(_coerce_amount(value, 500))
         return "Scrolled down."
 
     func = ACTION_MAP.get(action)

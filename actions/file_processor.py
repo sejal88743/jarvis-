@@ -18,6 +18,7 @@ Supported types:
 
 import os
 import re
+import sys
 import json
 import shutil
 import subprocess
@@ -300,9 +301,11 @@ def _process_text_doc(path: Path, file_type: str, action: str,
     }
 
     if action not in prompt_map:
-
-        action  = "custom"
-        instruction = action
+        # An unrecognised action is treated as a free-form instruction. The old
+        # code overwrote `instruction` with the action name first, which threw
+        # away the user's actual instruction and sent the action word instead.
+        prompt_map["custom"] = f"{instruction or action}\n\n{content[:40000]}"
+        action = "custom"
 
     try:
         model    = _gemini_client()
@@ -328,7 +331,14 @@ def _process_data(path: Path, file_type: str, action: str,
 
     try:
         if file_type == "csv":
-            df = pd.read_csv(path, encoding="utf-8", errors="replace")
+            # pandas has no `errors=` argument (that is a builtin-open kwarg);
+            # passing it raised TypeError on every CSV the user opened. Read with
+            # a forgiving encoding and fall back to a Latin-1 re-read for files
+            # that are not valid UTF-8 rather than failing outright.
+            try:
+                df = pd.read_csv(path, encoding="utf-8")
+            except UnicodeDecodeError:
+                df = pd.read_csv(path, encoding="latin-1")
         else:
             df = pd.read_excel(path)
     except Exception as e:
@@ -398,8 +408,14 @@ def _process_data(path: Path, file_type: str, action: str,
         asc = params.get("ascending", True)
         try:
             sorted_df = df.sort_values(col, ascending=asc)
-            out = _output_path(path, "sorted", path.suffix)
-            sorted_df.to_csv(out, index=False)
+            # Keep the source format: writing a sorted .xlsx out as CSV under an
+            # .xlsx name produced an Excel file that would not open.
+            if file_type == "csv":
+                out = _output_path(path, "sorted", ".csv")
+                sorted_df.to_csv(out, index=False)
+            else:
+                out = _output_path(path, "sorted", ".xlsx")
+                sorted_df.to_excel(out, index=False)
             return f"Sorted by '{col}'. Saved: {out.name}"
         except Exception as e:
             return f"Sort failed: {e}"
@@ -465,9 +481,12 @@ def _process_code(path: Path, action: str, params: dict, speak=None) -> str:
     if action == "run":
         if ext == "py":
             try:
+                # Run with the interpreter this app is already using — a bare
+                # "python" can be a different install (or missing) on PATH.
                 result = subprocess.run(
-                    ["python", str(path)],
-                    capture_output=True, text=True, timeout=30
+                    [sys.executable, str(path)],
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=30
                 )
                 out = result.stdout or result.stderr
                 return f"Output:\n{out[:2000]}" if out else "No output."
@@ -663,7 +682,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             return f"Extract frame failed: {e}"
 
     if action == "compress":
-        crf = int(params.get("quality", 28))  
+        crf = int(params.get("quality", 28))
         if not _ffmpeg_available():
             return "ffmpeg not found."
         out = _output_path(path, f"compressed_crf{crf}", ".mp4")
@@ -684,7 +703,12 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
     if action == "transcribe":
         if not _ffmpeg_available():
             return "ffmpeg not found. Needed for video transcription."
-        tmp_audio = Path(tempfile.mktemp(suffix=".mp3"))
+        # mktemp() is deprecated and racy (it hands back a name, not a file, so
+        # another process can grab the path first). mkstemp() creates it safely;
+        # close the fd immediately — ffmpeg opens the path by name.
+        _fd, _tmp_name = tempfile.mkstemp(suffix=".mp3")
+        os.close(_fd)
+        tmp_audio = Path(_tmp_name)
         try:
             subprocess.run(
                 ["ffmpeg", "-i", str(path), "-q:a", "0", "-map", "a",

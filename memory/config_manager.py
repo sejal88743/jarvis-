@@ -135,6 +135,24 @@ def save_push_to_talk_enabled(enabled: bool) -> None:
     _save_flag("push_to_talk_enabled", enabled)
 
 
+def get_advanced_mode() -> bool:
+    """Advanced / full-desktop-access mode.
+
+    On  = system_access may reach any path, launch any executable and run shell
+          commands (still with the undo stack and the tiny destructive-command
+          seatbelt).
+    Off = system_access refuses the reaching-outside-the-home operations and the
+          assistant behaves exactly as before. Default is ON here because the
+          bundled file_controller already guards routine work; flip it off in
+          config/api_keys.json ("advanced_mode": false) to lock it back down.
+    """
+    return bool(load_api_keys().get("advanced_mode", True))
+
+
+def save_advanced_mode(enabled: bool) -> None:
+    _save_flag("advanced_mode", bool(enabled))
+
+
 HUD_STYLES = ("face", "core")
 
 
@@ -330,7 +348,12 @@ def save_output_device(name: str) -> None:
 
 def get_plugin_enabled(plugin_name: str) -> bool:
     """Plugins are enabled by default the moment they're discovered (opt-out model)."""
-    return load_api_keys().get("plugins_enabled", {}).get(plugin_name, True)
+    cfg = load_api_keys().get("plugins_enabled")
+    # A missing key, or a hand-edited one that is null / not a dict, must not
+    # raise — the opt-out default is "enabled", so that is what we fall back to.
+    if not isinstance(cfg, dict):
+        return True
+    return bool(cfg.get(plugin_name, True))
 
 
 # ── Per-plugin settings ("tokens" / connection details) ───────────────────────

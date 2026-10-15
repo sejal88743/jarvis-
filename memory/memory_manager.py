@@ -406,6 +406,8 @@ def remember(key: str, value: str, category: str = "notes") -> str:
 def forget(key: str, category: str = "notes") -> str:
     memory = load_memory()
     cat    = memory.get(category, {})
+    if not isinstance(cat, dict):
+        return f"Not found: {category}/{key}"
     if key in cat:
         del cat[key]
         memory[category] = cat

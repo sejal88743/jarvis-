@@ -1,0 +1,68 @@
+MARK LV — first run
+═══════════════════════════════════════════════════════════════════════════════
+
+  1. Launch MARK LV from the Start Menu (or the desktop shortcut, if you
+     chose one).
+
+  2. On the first screen, paste your FREE Gemini API key and press Save.
+     Get one at:  https://aistudio.google.com/app/apikey
+
+     The key is stored at:
+         %APPDATA%\MARK-LV\config\api_keys.json
+     It is plain text and readable by your Windows account only. Treat it
+     like a password. Nothing is sent anywhere except to Google, for the
+     assistant itself.
+
+  3. Say "Hey Jarvis" (if you turned the wake word on) or just talk.
+     Hold Ctrl+Space for push-to-talk.
+
+
+WHERE YOUR THINGS LIVE
+═══════════════════════════════════════════════════════════════════════════════
+
+  Your API key, settings and everything the assistant remembers are kept in:
+
+      %APPDATA%\MARK-LV\
+
+  — NOT in Program Files. That means upgrading or reinstalling MARK LV never
+  touches them, and uninstalling never deletes them. If you want a completely
+  clean removal, delete that folder yourself afterwards.
+
+  Plugins are kept in the same place, under:
+
+      %APPDATA%\MARK-LV\plugins\
+
+  Drop a .py file in there and restart MARK LV — it is picked up
+  automatically. Skills in the bundled folders work the same way.
+
+
+ADDING SKILLS
+═══════════════════════════════════════════════════════════════════════════════
+
+  Copy skills/_template.py, rename it, fill it in, and put it in any of:
+
+      skills/    new skills
+      actions/   bundled skills that drive the computer
+      plugins/   your own additions  (in %APPDATA%\MARK-LV\plugins\)
+
+  All three use the same one-dict contract, so nothing else needs changing.
+
+
+IF SOMETHING DOES NOT WORK
+═══════════════════════════════════════════════════════════════════════════════
+
+  The assistant can check its own dependencies for you — just ask it:
+
+      "check your dependencies"
+      "install everything that is missing"
+
+  A few optional extras (pandas, pydub, the wake-word engine) are not
+  installed by default because they are large. Enable them on demand from
+  Settings, or by asking.
+
+  Web automation additionally needs a browser download. Ask the assistant to
+  "download the automation browser", or run it from Settings.
+
+───────────────────────────────────────────────────────────────────────────────
+  Personal and non-commercial use only — CC BY-NC 4.0.
+───────────────────────────────────────────────────────────────────────────────

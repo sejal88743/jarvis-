@@ -72,12 +72,14 @@ from memory.config_manager     import (
     get_brief_enabled, get_live_screen_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
+    get_plugin_enabled,
 )
 from core                     import gemini as _gemini
 from core.plugin_loader        import discover_plugins
+from core.toolkit_registry     import discover_toolkit
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
-from core.paths                import app_root, resource_root
+from core.paths                import app_root, resource_root, install_root
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
@@ -688,28 +690,36 @@ class JarvisLive:
         _base_dir = app_root()
         _inline_names = {t["name"] for t in TOOL_DECLARATIONS}
 
-        # File-backed tools: every actions/*.py with a TOOL dict, discovered the
-        # same way plugins are. Reserved names = the inline tools above, so an
-        # action can never shadow one.
-        self._action_registry = discover_actions(
-            actions_dir=_base_dir / "actions",
-            reserved_names=_inline_names,
-            logger=lambda msg: print(f"[Actions] {msg}"),
-        )
-
-        # Plugins must not collide with either an inline tool or a discovered action.
-        _core_names = _inline_names | self._action_registry.names()
-        self._plugin_registry = discover_plugins(
-            plugins_dir=_base_dir / "plugins",
-            core_tool_names=_core_names,
+        # ── ONE registry over every skill ────────────────────────────────────
+        # skills/, actions/ and plugins/ are the same contract (core/toolkit.py)
+        # loaded by one loader, so there is a single place the model, the UI and
+        # main.py ask about the things this assistant can do. This is what makes
+        # an INSTALLED copy work: the program folder is read-only, so the user's
+        # own plugins live in AppData and are merged into the same registry.
+        # Reserved names = the inline tools above, so a file-backed skill can
+        # never shadow a live-session one.
+        # Two roots when installed: the program folder holds the bundled
+        # skills, and AppData holds the user's own additions. In a source or
+        # portable run these are the same folder, so the second is a no-op.
+        _program_dir = install_root()
+        _roots = [_program_dir] if _program_dir == _base_dir else [_program_dir, _base_dir]
+        self._toolkit = discover_toolkit(
+            _roots,
+            reserved=_inline_names,
             # Console gets the full boot transcript; the activity log gets only
-            # what the user has to know about. Every plugin loading correctly is
+            # what the user has to know about. Every skill loading correctly is
             # the expected case and does not belong in their conversation.
-            logger=lambda msg: print(f"[Plugins] {msg}"),
+            logger=lambda msg: print(msg),
             notify=lambda msg: self.ui.write_log(f"SYS: {msg}"),
+            enabled_fn=get_plugin_enabled,
         )
-        self.ui.get_plugins = self._plugin_registry.list_for_ui
-        self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
+        # Kept as aliases so every existing reference in this file — and in
+        # plugins that reach back for one — resolves to the same object.
+        self._action_registry = self._toolkit
+        self._plugin_registry = self._toolkit
+        self.ui.get_plugins = self._toolkit.ui_list
+        self.ui.get_plugin_settings = self._toolkit.settings_schemas  # ⚙ settings tab
+        self.ui.get_skills = self._toolkit.ui_list                    # ⚙ skill manager
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
         # ── Wake word ────────────────────────────────────────────────────────
@@ -1091,9 +1101,9 @@ class JarvisLive:
         # the host, the capability list from the registries that were just
         # discovered. Rename the assistant, add a plugin or move to another OS
         # and this follows without anyone editing a prompt.
-        _all_decls = (TOOL_DECLARATIONS
-                      + self._action_registry.get_tool_declarations()
-                      + self._plugin_registry.get_tool_declarations())
+        # One call: the unified registry returns every file-backed skill once.
+        # (The inline tools above are not in it — they are live-session state.)
+        _all_decls = TOOL_DECLARATIONS + self._toolkit.declaration_list()
         _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
@@ -1326,13 +1336,17 @@ class JarvisLive:
                     _os._exit(0)
                 asyncio.create_task(_do_shutdown())
 
-            elif self._action_registry.has(name):
+            elif self._toolkit.has(name):
+                # ONE dispatch path for every file-backed skill — action, plugin
+                # or skills/-folder file. The registry injects only the context
+                # kwargs the handler declares, so all three styles just work.
                 # file_processor: fall back to the currently-uploaded file when none is given
                 if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
                 _ctx = {"player": self.ui, "speak": self.speak,
                         "response": None, "session_memory": None}
-                r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
+                r = await loop.run_in_executor(
+                    None, lambda: self._toolkit.call(name, args, _ctx))
                 result = r or "Done."
                 # web_search: mirror results to the on-screen content panel
                 if (name == "web_search" and r
@@ -1344,14 +1358,7 @@ class JarvisLive:
                     self.ui.show_content(_label, r)
 
             else:
-                if self._plugin_registry.has(name):
-                    r = await loop.run_in_executor(
-                        None,
-                        lambda: self._plugin_registry.run(name, args, player=self.ui, session_memory=None)
-                    )
-                    result = r or "Done."
-                else:
-                    result = f"Unknown tool: {name}"
+                result = f"Unknown tool: {name}"
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
@@ -1369,8 +1376,7 @@ class JarvisLive:
         # something like a phone call already ringing, is exactly the noise the
         # non-blocking call was meant to avoid. Tools that declared nothing get
         # the API default and behave as they always have.
-        _sched = (self._action_registry.scheduling(name)
-                  or self._plugin_registry.scheduling(name))
+        _sched = self._toolkit.scheduling(name)
         _extra = {"scheduling": _sched} if _sched else {}
         return types.FunctionResponse(
             id=fc.id, name=name,
@@ -1527,6 +1533,16 @@ class JarvisLive:
             if enabled_since is None:
                 enabled_since = now
             elif now - enabled_since >= 105.0:
+                # NEVER rebuild the session mid-turn. Replaying the resumption
+                # handle while a turn is still in flight makes the server
+                # re-generate the pending turn — the user hears the same reply
+                # twice, and their next sentence gets stitched onto the old
+                # task. Wait for a quiet moment instead.
+                with self._speaking_lock:
+                    speaking = self._is_speaking
+                if speaking:
+                    await asyncio.sleep(2.0)
+                    continue
                 self.request_reconnect(keep_context=True, reason="live screen session refresh")
                 await asyncio.sleep(2.0)
                 continue
