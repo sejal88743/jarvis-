@@ -1,0 +1,13 @@
+{
+  "app_name": "Response Workflow",
+  "steps": "The user wants to scan WhatsApp payment screenshots, match bill numbers in HUL Driver app, and send 'ok' or a discrepancy message.",
+  "notes": "Cannot automate directly. Awaiting user's explanation on how they want this process performed or simulated within current constraints.",
+  "updated_at": "2026-10-16 10:48",
+  "history": [
+    {
+      "steps": "The user wants to scan WhatsApp payment screenshots, match bill numbers in HUL Driver app, and send 'ok' or a discrepancy message.",
+      "notes": "Cannot automate directly. Awaiting user's explanation on how they want this process performed or simulated within current constraints.",
+      "saved_at": "2026-10-16 10:48"
+    }
+  ]
+}
